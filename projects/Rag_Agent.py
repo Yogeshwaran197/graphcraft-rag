@@ -12,6 +12,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import InMemorySaver
 from typing import TypedDict, List, Annotated, Sequence
 from pydantic import BaseModel,  Field
 
@@ -170,7 +171,11 @@ graph.add_conditional_edges(
 
 graph.add_edge("tool_node", "llm")
 
-Rag_Agent = graph.compile()
+checkpoint = InMemorySaver()
+
+Rag_Agent = graph.compile(checkpointer=checkpoint)
+
+config = {"configurable" : {"thread_id":"yogi"}}
 
 
 def running_agent():
@@ -189,7 +194,7 @@ def running_agent():
 
         response = Rag_Agent.invoke({
             "messages" : message
-        })
+        }, config=config)
 
         print(response['messages'][-1].content)
 
