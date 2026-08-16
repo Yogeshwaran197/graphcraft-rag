@@ -46,7 +46,7 @@ def reflector_node(messages):
 
 def should_continue(state) -> str:
 
-    if (len(state) > 6):
+    if (len(state) < 6):
         return "continue"
     
     return "End"
