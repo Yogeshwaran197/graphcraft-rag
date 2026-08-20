@@ -1,11 +1,3 @@
-from boto3.resources import factory
-from boto3.resources import factory
-from boto3.resources import factory
-from boto3.resources import factory
-from boto3.resources import factory
-from boto3.resources import factory
-from boto3.resources import factory
-from chromadb.api.types import Document
 import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -24,13 +16,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.message import add_messages
 from  typing import TypedDict, Annotated, Sequence , List
 from pydantic import BaseModel, Field
+from langchain_core.documents import Document
 
 
 load_dotenv()
 
 
 llm = ChatGroq(
-    model ="llama-3.1-8b-instant"
+    model ="openai/gpt-oss-120b"
 )
 
 embeddings = HuggingFaceEmbeddings(
@@ -40,7 +33,7 @@ embeddings = HuggingFaceEmbeddings(
 
 document_path = "projects\Stock_Market_Performance_2024.pdf"
 
-if not os.path.exist(document_path):
+if not os.path.exists(document_path):
     raise ValueError("file not exist")
 
 
@@ -56,10 +49,10 @@ splitter = RecursiveCharacterTextSplitter(
     chunk_size = 2000,
     chunk_overlap = 200
 )
-chunks = splitter.split_documents(splitter)
+chunks = splitter.split_documents(pages)
 
 persist_directory = r"C:\Users\JANARTHAN\graphcraft-rag\projects\chroma_db"
-collection_name = "Corrective Rag"
+collection_name = "Corrective_Rag"
 
 try:
     vectorstore = Chroma.from_documents(
@@ -70,6 +63,7 @@ try:
     )
 except Exception as e:
     print(f"Error creating VectorStore {e}")
+    raise
 
 
 retirever = vectorstore.as_retriever(
@@ -87,7 +81,7 @@ class CragAgent(TypedDict):
     web_search_need: bool
 
 
-def retriver(state: CragAgent) -> CragAgent:
+def retriever_node(state: CragAgent) -> CragAgent:
 
     question = state['question']
     result  = retirever.invoke(question)
@@ -101,7 +95,7 @@ llm_with_schema = llm.with_structured_output(grader)
 
 def grader_node(state: CragAgent) -> CragAgent:
 
-    prompt = ChatPromptTemplate.format_messages([
+    prompt = ChatPromptTemplate.from_messages([
     ("system",
      "You grade whether a retrieved document is relevant to a user question. "
      "Give 'yes' if it contains keywords or semantic meaning related to the "
@@ -122,8 +116,10 @@ def grader_node(state: CragAgent) -> CragAgent:
             })
         
         if result.binary_score.lower() == "yes" :
-            filtered_docs.append(filtered_docs)
+            filtered_docs.append(doc)
             web_search_needed = False
+        else:
+            web_search_needed = True   
         
         if len(filtered_docs) == 0:
             web_search_needed = True
@@ -132,7 +128,8 @@ def grader_node(state: CragAgent) -> CragAgent:
     return {"document": filtered_docs, "web_search_need": web_search_needed}
 
 
-def should_decide(state: CragAgent) -> Literal["transform_query", "generate"]:
+
+def should_decide(state: CragAgent) -> str:
 
     websearch = state['web_search_need']
 
@@ -176,9 +173,10 @@ def web_search(state : CragAgent):
 
     search = TavilySearchResults(k=5)
     result =  search.invoke(query)
-    web_docs = [Document(page_content = r['cotent']) for r in result]
+    web_docs = [Document(page_content = r['content']) for r in result]
 
     return {"document" :  state["document"] + web_docs}
+
 
 
 
@@ -196,10 +194,60 @@ def generate(state : CragAgent):
 
     answer = generate_chain.invoke({
         "context": context,
-        "question": state["query"]
+        "question": state["question"]
     })
 
     return {"generation" : answer}
+
+
+graph  = StateGraph(CragAgent)
+
+graph.add_node("retriever", retriever_node)
+graph.add_node("grader", grader_node)
+graph.add_node("transform-query", transformer_query)
+graph.add_node("web-search", web_search)
+graph.add_node("generate", generate)
+
+
+graph.add_edge(START, "retriever")
+graph.add_edge("retriever", "grader")
+graph.add_conditional_edges(
+    "grader",
+    should_decide,
+    {
+        "Transformquery" : "transform-query",
+        "generator" : "generate"
+    }
+)
+
+graph.add_edge("transform-query", "web-search")
+graph.add_edge("web-search", "generate")
+graph.add_edge("generate", END)
+
+checkpointer = InMemorySaver()
+
+Crag = graph.compile( checkpointer = checkpointer)
+
+
+stream_input = {"question": "What was the S&P 500 return in 2026?"}
+config = {"configurable" : {"thread_id" : "yogi1"}}
+
+while True:
+
+    result = Crag.invoke(stream_input , config=config)
+
+    if "__interrupt__"  not in result:
+        print(result['generation'])
+        break
+    
+    interrupt_payload =  result['__interrupt__'][0].value
+    print(f"\nApproval for web searh : {interrupt_payload}")
+
+    answer = input("[y/n] Approve web search? ")
+    stream_input = Command(resume=answer)
+
+
+
 
 
 
